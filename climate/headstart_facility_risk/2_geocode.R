@@ -1,6 +1,6 @@
 ###############################################################################
 # PURPOSE: geocode head start facilities to enable mapping
-# LAST EDITED: 17 mar 2023
+# LAST EDITED: 12 apr 2023
 ############################################################################### . 
 
 #### set up ####
@@ -13,10 +13,11 @@ library(tidyverse) # the most useful functions!
 library(sf) #  for geospatial file handling
 library(tmaptools) # for geocoding addresses
 library(reticulate) # for calling Python
+library(httr) # for api calls
 
 # define directories
 wd <- if_else(
-    str_detect(getwd(), "Github"),
+    str_detect(getwd(), "GitHub"),
     getwd(),
     paste(
         getwd(), 
@@ -26,45 +27,50 @@ wd <- if_else(
 )
 dd <- paste(wd, "data", sep = "/")
 od <- paste(wd, "output", sep = "/")
+td <- paste(wd, "test", sep = "/")
 
 #### load data ####
 load(paste(dd, "1_prepped.Rdata", sep = "/"))
 
 #### create unified address field for geocoding ####
 # ignore address_line2 and zip4
-d_facilities <- d_facilities %>%
-    mutate(address = paste0(
-        address_line1, " ",
-        city, ", ",
-        state_code, " ",
-        zip
-    ))
+d_locations <- d_locations %>%
+    mutate(
+        address = paste0(
+            address_line1, ", ",
+            city, ", ",
+            state_code, " ",
+            zip
+        ),
+        geocode_source = if_else(is.na(lat), NA, "hses")
+    )
 
 # quality check: unexpected symbols in address data?
 # >>> some # and ()s --> clean up
-d_facilities$address[str_detect(d_facilities$address, "[#!@\\^\\(\\)]+")]
+d_locations$address[str_detect(d_locations$address, "[#!@\\^\\(\\)]+")]
 
-d_facilities <- d_facilities %>%
+d_locations <- d_locations %>%
     mutate(
         address = address %>% str_replace_all("[#\\(\\)]+", "")   
     )
-d_facilities$address[str_detect(d_facilities$address, "[#!@\\^\\(\\)]+")]
+d_locations$address[str_detect(d_locations$address, "[#!@\\^\\(\\)]+")]
 
 #### get latitude/longitude via Open Street Maps (OSM) API ####
 # initialize an empty dataframe with correct structure by geocoding 
 # a seed address
 d_latlong <- geocode_OSM(
-    q = d_facilities %>% slice_head(n = 1) %>% pull(address),
+    q = d_locations %>% slice_head(n = 1) %>% pull(address),
     as.data.frame = TRUE,
     details = TRUE
 )
 glimpse(d_latlong)
 d_latlong <- d_latlong %>% filter(is.na(query))
 
-# filter down to unique addresses
-d_addresses <- d_facilities %>%
+# filter down to unique addresses without lat/longs
+d_addresses <- d_locations %>%
+    filter(is.na(lat) | is.na(lon)) %>%
     select(address) %>%
-    unique()
+    distinct()
 
 # define batches to get around API call limits
 n_facilities <- nrow(d_addresses)
@@ -129,7 +135,7 @@ d_latlong <- d_latlong %>%
         query, 
         lat, lon, 
         address_standardized = display_name,
-        location_type = type,
+        building_type = type,
         geocode_source,
     )
 
@@ -146,86 +152,159 @@ d_latlong %>% filter(is.na(lon)) %>% glimpse()
 # save final geocoded data
 save(d_latlong, file = paste(dd, "3_geocoded_final.rdata", sep = "/"))
 
-#### attach lat/long and hazard risks to d_facilities ####
+#### combine lat/long to d_locations ####
 # join in lat/long
-n_records_before <- nrow(d_facilities)
+n_records_before <- nrow(d_locations)
 
-glimpse(d_facilities )
-d_facilities <- d_facilities %>%
+glimpse(d_locations )
+d_locations <- d_locations %>%
     left_join(d_latlong, by = c("address" = "query")) %>%
     mutate(
         lat = if_else(is.na(lat.x), lat.y, lat.x),
         lon = if_else(is.na(lon.x), lon.y, lon.x),
-        address_standardized = if_else(
-            is.na(address_standardized.x),
-            address_standardized.y,
-            address_standardized.x
-        ),
-        location_type = if_else(
-            is.na(location_type.x),
-            location_type.y,
-            location_type.x
-        ),
-        geocode_source = if_else(is.na(geocode_source), "osm", geocode_source)
+        geocode_source = if_else(is.na(geocode_source), "osm", geocode_source),
     ) %>%
-    select(
-        -lat.x, -lon.x, -lat.y, -lon.y,
-        -address_standardized.x, -address_standardized.y,
-        -location_type.x, -location_type.y,
-    )
-glimpse(d_facilities)
+    select(-lat.x, -lon.x, -lat.y, -lon.y)
+glimpse(d_locations)
 
-n_records_after <- nrow(d_facilities)
+n_records_after <- nrow(d_locations)
 
 n_records_before == n_records_after
 
 # clean up location types
-d_facilities <- d_facilities %>%
+d_locations <- d_locations %>%
     mutate(
-        location_type = case_when(
-            is.na(location_type) ~ "unknown",
-            location_type %in% c("yes", "unclassified") ~ "unknown",
-            TRUE ~ str_replace(location_type, "_", " ")
+        building_type = case_when(
+            is.na(building_type) ~ "unknown",
+            building_type %in% c("yes", "unclassified") ~ "unknown",
+            TRUE ~ str_replace(building_type, "_", " ")
         )
     )
 
-# join in hazard risks
-n_records_before <- nrow(d_facilities)
+#### match locations to census tracts ####
+# define desired projection
+sf_use_s2(FALSE)
+proj_target <- 4326 # WGS84 (EPSG: 4326) lat/lon projection
 
-d_facilities <- d_facilities %>%
-    left_join(
-        d_nia %>% st_drop_geometry(), 
-        by = c("county", "state_code", "county_type")
+# create simple feature object of Head Start locations
+d_locations_sf <- d_locations %>%
+    select(location_id, state_code, lat, lon) %>%
+    st_as_sf(
+        crs = proj_target,
+        coords = c("lon", "lat")
     )
-glimpse(d_facilities)
 
-n_records_after <- nrow(d_facilities)
+# create pared down version of census tract geometries
+d_tracts <- d_nia %>%
+    select(tract_fips, state_code, shape) %>%
+    st_transform(crs = proj_target) %>%
+    st_make_valid()
+
+# peek to make sure plotting is as expected
+plot(d_tracts %>% filter(state_code == "IL") %>% select(tract_fips), reset = FALSE)
+plot(d_locations_sf %>% filter(state_code == "IL") %>% select(location_id), add = TRUE)
+
+# find which census tract each location falls in
+d_location_tracts <- st_join(
+    d_locations_sf, 
+    d_tracts %>% select(-state_code), 
+    join = st_within)
+glimpse(d_location_tracts)
+
+# spot check with results from https://geocoding.geo.census.gov/geocoder/
+# using census 2020 boundaries
+# >>> yay, checks out; one mis-match but the geocoder said it was 'inexact'
+d_location_tracts %>% 
+    slice_sample(n = 10) %>%
+    left_join(
+        d_locations %>% 
+            select(location_id, address_line1, city, zip), 
+        by = "location_id"
+    ) %>%
+    select(address_line1, city, state_code, zip, location_id, tract_fips) %>%
+    write_csv(paste(td, "census_tract_geocode_sample.csv", sep = "/"))
+
+# handle any missing census tract mappings
+# 12 are the Palau locations, which we knew were missing
+# >>> fix the 3 others using the census geocoding API
+# https://geocoding.geo.census.gov/geocoder/Geocoding_Services_API.html
+d_location_tracts %>% filter(is.na(tract_fips)) %>% glimpse()
+
+d_location_find_tracts <- d_location_tracts %>% 
+    filter(
+        is.na(tract_fips),
+        state_code != "PW",
+    ) %>%
+    left_join(
+        d_locations %>% 
+            select(location_id, lat, lon), 
+        by = "location_id"
+    ) %>%
+    st_drop_geometry()
+
+base_url <- "https://geocoding.geo.census.gov/geocoder/geographies/coordinates?"
+
+for (i in 1:nrow(d_location_find_tracts)) {
+    d_location_found_tracts <- GET(paste0(
+        base_url,
+        "benchmark=2020",
+        "&vintage=2020",
+        "&x=", d_location_find_tracts$lon[i],
+        "&y=", d_location_find_tracts$lat[i],
+        "&layers=9",
+        "&format=json"
+    ))
+    
+    d_location_find_tracts$tract_fips[i] <- 
+        content(d_location_found_tracts)$result$geographies$`Census Tracts`[[1]]$GEOID
+}
+
+d_location_tracts <- d_location_tracts %>%
+    filter(!is.na(tract_fips) | state_code == "PW") %>%
+    bind_rows(d_location_find_tracts) %>%
+    select(-lat, -lon, -state_code, -nia_id) %>%
+    # re-add in nia_ids so that the api-coded records also have them
+    left_join(
+        d_nia_data %>% select(nia_id, tract_fips),
+        by = "tract_fips"
+    )
+
+# join in census tract data to d_locations
+n_records_before <- nrow(d_locations)
+d_locations <- d_locations %>%
+    left_join(d_location_tracts %>% st_drop_geometry, by = "location_id")
+n_records_after <- nrow(d_locations)
+
+n_records_before == n_records_after
+d_locations %>% filter(is.na(nia_id)) %>% nrow()
+
+#### combine with hazard risks ####
+# join in hazard risks
+n_records_before <- nrow(d_locations)
+
+d_locations <- d_locations %>%
+    left_join(
+        d_nia_data %>% select(-state_code, -county, -county_type), 
+        by = c("nia_id")
+    )
+glimpse(d_locations)
+
+n_records_after <- nrow(d_locations)
 
 n_records_before == n_records_after
 
 # quality check: look for missing hazard risks
-# >>> all for territories, as expected
-d_facilities %>%
+# >>> all for Palau, as expected
+d_locations %>%
     summarize(across(
         .cols = c(contains("riskr"), contains("ratng")), 
         .fns = ~sum(is.na(.))
     ))
 
-d_facilities %>% 
+d_locations %>% 
     filter(is.na(risk_ratng)) %>% 
     count_by_group(n, state_code) %>%
     print(n = Inf)
-
-
-#### do light clean-up of grantee names (TODO: upstream) ####
-d_facilities <- d_facilities %>%
-    mutate(grantee = case_when(
-        grantee == "Child Development Resources Of Ventura County, Inc." ~
-            "Child Development Resources of Ventura County, Inc.",
-        grantee == "Eckerd Youth Alternatives Inc." ~
-            "Eckerd Youth Alternatives, Inc.",
-        TRUE ~ grantee
-    ))
 
 #### create long version of facility data by risk rating ####
 key_risks <- c(
@@ -235,9 +314,9 @@ key_risks <- c(
     "wfir_riskr"
 )
 
-d_facilities_byrisk <- d_facilities %>%
+d_locations_byrisk <- d_locations %>%
     select(
-        grant_id:geocode_source,
+        grant_id:nia_id,
         any_of(key_risks),
     ) %>%
     pivot_longer(
@@ -276,45 +355,49 @@ d_facilities_byrisk <- d_facilities %>%
             "Insufficient Data"
         ))
     )
-glimpse(d_facilities_byrisk)
+glimpse(d_locations_byrisk)
 
 #### save final analyzable data #### 
 # for Tableau mapping
-d_tableau <- d_facilities %>% 
+d_tableau <- d_locations %>% 
     # slim down given tableau will have multiple map layers
     select(
         grant_id,
         grantee,
         program,
-        facility,
-        facility_id,
+        location_name,
+        location_id,
         address,
         state_code,
         county,
         county_type,
         lat,
         lon,
+        tract_fips,
         location_type,
+        building_type,
         data_grantee_verification_status,
         starts_with("is_"),
-        contains("_ratng"),
-        contains("_riskr"),
+        ends_with("_slots"),
+        any_of(key_risks),
     ) %>%
     # reshape for easier plotting of site type
     pivot_longer(
-        cols = c(contains("hs_site"), is_child_care_partner_site),
+        cols = c(contains("_slots")),
         names_to = "program_type",
-        names_prefix = "is_",
-        values_to = "is_program_type"
+        names_pattern = "(.*)_slots",
+        values_to = "program_slots"
     ) %>%
-    # change T/F to yes/no
-    mutate(across(
-        .cols = starts_with("is_"),
-        .fns = ~if_else(. == TRUE, "Yes", "No")
-    )) %>%
+    mutate(
+        # change T/F to yes/no
+        across(
+            .cols = starts_with("is_"),
+            .fns = ~if_else(. == TRUE, "Yes", "No")
+        )
+    ) %>%
     # add a row number to allow filtering down to unique facilities when
     # not using the program type data
-    group_by(facility_id) %>%
+    group_by(location_id) %>%
     mutate(dummy_filter = row_number()) %>%
     ungroup()
 glimpse(d_tableau)    
@@ -325,8 +408,8 @@ write_csv(d_tableau, paste(dd, "tb_facilities.csv", sep = "/"))
 save(
     d_nia_data,
     d_nia_dictionary,
-    d_facilities,
-    d_facilities_byrisk,
+    d_locations,
+    d_locations_byrisk,
     d_tableau,
     file = paste(dd, "4_analyzable.Rdata", sep = "/")
 )

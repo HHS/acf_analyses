@@ -1,6 +1,6 @@
 ###############################################################################
 # PURPOSE: understand HS facility risk of tornadoes, hurricanes, wildfires
-# LAST EDITED: 17 mar 2023
+# LAST EDITED: 12 apr 2023
 # RELATED: https://public.tableau.com/app/profile/janeyang/viz/HeadStartFacilityHazardRisks/NaturalHazardRiskforHeadStartFacility
 ############################################################################### . 
 
@@ -67,7 +67,7 @@ count_by_group <- function(data, arrange_var, ...){
 load(paste(dd, "4_analyzable.Rdata", sep = "/"))
 
 # create version of risk table focused on moderate -> high risk
-d_facilities_atrisk <- d_facilities_byrisk %>% 
+d_locations_atrisk <- d_locations_byrisk %>% 
     filter(risk_rating %in% c(
         "Very High", 
         "Relatively High", 
@@ -76,37 +76,53 @@ d_facilities_atrisk <- d_facilities_byrisk %>%
 
 #### calculate/plot basic stats for baseline understanding of facilities ####
 # number of facilities
-n_facilities <- nrow(d_facilities)
+n_locations <- nrow(d_locations)
 
-# interest, ownership, program overview
-d_pcts <- d_facilities %>%
+# interest, ownership, and child care overview
+d_pcts_characteristics <- d_locations %>%
     summarize(across(starts_with("is_"), mean)) %>%
-    glimpse() %>%
     pivot_longer(
         cols = everything(),
-        names_to = "program",
-        values_to = "pct_facilities"
+        names_to = "characteristic",
+        values_to = "pct_locations"
     ) %>%
     mutate(
         program = case_when(
-            program == "is_federal_interest_site" ~ "Federal Interest",
-            program == "is_owned_by_program" ~ "Program-Owned",
-            program == "is_child_care_partner_site" ~ "Child Care Partner",
-            program == "is_aian_ehs_site" ~ "AIAN Early Head Start",
-            program == "is_aian_hs_site" ~ "AIAN Head Start",
-            program == "is_migrant_ehs_site" ~ "Migrant Early Head Start",
-            program == "is_migrant_hs_site" ~ "Migrant Head Start",
-            program == "is_ehs_site" ~ "Early Head Start",
-            program == "is_hs_site" ~ "Head Start",
-        )
-    ); d_pcts
+            characteristic == "is_federal_interest_site" ~ "Federal Interest",
+            characteristic == "is_owned_by_program" ~ "Program-Owned",
+            characteristic == "is_child_care_partner_site" ~ "Child Care Partner",
+        ),
+        n_locations = pct_locations * n_locations,
+    ); d_pcts_characteristics
+
+# share by federal interest and ownership combined
+count_by_group(d_locations, n, is_federal_interest_site, is_owned_by_program)
+
+# program overview
+d_pcts_programs <- d_locations %>%
+    summarize(across(ends_with("_slots"), ~mean(.>0))) %>%
+    select(-total_slots) %>%
+    pivot_longer(
+        cols = everything(),
+        names_to = "program",
+        values_to = "pct_locations"
+    ) %>%
+    mutate(
+        program = program %>% 
+            str_replace_all("_", " ") %>%
+            str_replace(" slots", "") %>%
+            str_replace("ehs", "Early Head Start") %>%
+            str_replace("hs", "Head Start") %>%
+            str_to_title() %>%
+            str_replace("Aian", "AIAN"),
+        n_locations = pct_locations * n_locations,
+    ); d_pcts_programs
 
 p_program <- ggplot(
-        data = d_pcts %>% 
-            filter(!(program %in% c("Federal Interest", "Program-Owned"))),
+        data = d_pcts_programs,
         aes(
-            x = fct_reorder(program, pct_facilities) %>% fct_rev,
-            y = pct_facilities
+            x = fct_reorder(program, pct_locations) %>% fct_rev,
+            y = pct_locations
         )
     ) +
     geom_bar(
@@ -115,29 +131,27 @@ p_program <- ggplot(
     ) +
     geom_text(
         mapping = aes(
-            label = comma(pct_facilities * n_facilities),
-            y = if_else(pct_facilities > 0.1,
-                pct_facilities - 0.06,
-                pct_facilities + 0.06
+            label = comma(n_locations),
+            y = if_else(pct_locations > 0.1,
+                pct_locations - 0.06,
+                pct_locations + 0.06
             ),
-            color = if_else(pct_facilities > 0.1, "white", "black"),
+            color = if_else(pct_locations > 0.1, "white", "black"),
         ),
         stat = "identity",
-        place = "top",
         family = "Gill Sans MT",
         size = 3,
     ) +
     geom_text(
         mapping = aes(
-            label = percent(pct_facilities, accuracy = 1),
-            y = if_else(pct_facilities > 0.1,
-                pct_facilities - 0.02,
-                pct_facilities + 0.02
+            label = percent(pct_locations, accuracy = 1),
+            y = if_else(pct_locations > 0.1,
+                pct_locations - 0.02,
+                pct_locations + 0.02
             ),
-            color = if_else(pct_facilities > 0.1, "white", "black"),
+            color = if_else(pct_locations > 0.1, "white", "black"),
         ),
         stat = "identity",
-        place = "top",
         family = "Gill Sans MT",
         size = 3,
     ) +
@@ -169,11 +183,8 @@ ggsave(
     height = 2.8,
 )
 
-# share by federal interest and ownership
-count_by_group(d_facilities, n, is_federal_interest_site, is_owned_by_program)
-
 # state breakdown by federal interest: percent
-d_state_interest_pct <- d_facilities %>%
+d_state_interest_pct <- d_locations %>%
     group_by(state_code) %>%
     summarize(pct_federal_interest = mean(is_federal_interest_site)) %>%
     ungroup()
@@ -203,10 +214,10 @@ p_state_interest_pct <- ggplot(
     labs(
         x = "",
         y = "",
-        title = str_wrap("Share of Head Start facilities with federal interest, 
+        title = str_wrap("Share of Head Start locations with federal interest, 
             by state", width = 55),
-        caption = str_wrap("Sources: Facilities pulled from Head Start 
-            Enterprise System as of March 7, 2023.", width = 85)
+        caption = str_wrap("Sources: Locations pulled from Head Start 
+            Enterprise System as of April 6, 2023.", width = 85)
     ) + 
     # customize scales
     scale_x_continuous(expand = c(0, 0)) +
@@ -227,35 +238,46 @@ ggsave(
 )
 
 # state breakdown by federal interest: count
+state_order <- d_locations %>%
+    filter(is_federal_interest_site) %>%
+    group_by(state_code) %>%
+    summarize(n_locations = n()) %>%
+    ungroup() %>%
+    arrange(n_locations %>% desc()) %>%
+    pull(state_code) # order by number of federal interest sites
+    
 p_state_interest <- ggplot(
-        data = d_facilities,
+        data = d_locations,
         mapping = aes(
-            y = fct_infreq(state_code) %>% fct_rev,
+            x = factor(state_code, levels = state_order),
             fill = is_federal_interest_site,
-        )
+        ),
     ) +
-    geom_bar(stat = "count") +
+    geom_bar(
+        stat = "count",
+        color = acf_palette[2]
+    ) +
     geom_text(
         mapping = aes(
             label = after_stat(count),
-            color = if_else(is_federal_interest_site, "black", "white"),
+            color = if_else(is_federal_interest_site, "white", "black"),
         ),
         stat = "count",
-        position = position_stack(reverse = TRUE, vjust = 0.5),
+        position = position_stack(vjust = 0.5),
         size = rel(2),
     ) +
     # add title, etc.
     labs(
         x = "",
         y = "",
-        title = "Head Start facilities by state",
-        caption = str_wrap("Sources: Facilities pulled from Head Start 
-            Enterprise System as of March 7, 2023.", width = 85)
+        title = "Head Start locations by state",
+        caption = str_wrap("Sources: Locations pulled from Head Start 
+            Enterprise System as of April 6, 2023.", width = 85)
     ) + 
     # customize scale
     scale_fill_manual(
-        name = "Federal Interest",
-        values = c("FALSE" = acf_palette[1], "TRUE" = acf_palette[3]),
+        name = "Federal Interest Site",
+        values = c("TRUE" = acf_palette[2], "FALSE" = "white"),
         labels = c("No", "Yes"),
         guide = guide_legend(reverse = TRUE)
     ) +
@@ -264,35 +286,38 @@ p_state_interest <- ggplot(
         guide = "none"
     ) +
     # format axes
-    scale_x_discrete(labels = function(x) str_wrap(x, width = 10)) +
+    scale_x_discrete(
+        labels = function(x) str_wrap(x, width = 10),
+        expand = c(0, 0)
+    ) +
+    scale_y_continuous(expand = c(0, 0)) +
     # extra formatting
     theme(
         # format legend
         legend.position = "top",
         legend.justification = "left",
         # get rid of visual distractions
-        panel.grid = element_blank(),
-        axis.text.x = element_blank()
+        panel.grid = element_blank()
     )
 p_state_interest
 ggsave(
     filename = paste(od, "state_and_interest.jpg", sep = "/"), 
     plot = p_state_interest,
-    width = 6,
-    height = 8,
+    width = 12,
+    height = 8
 )
     
 # federal interest by ownership
-d_state_interest_ownership_pct <- d_facilities %>%
+d_state_interest_ownership_pct <- d_locations %>%
     group_by(state_code) %>%
-    summarize(pct_federal_interest = mean(is_federal_interest_site)) %>%
+    summarize(pct_federal_interest_owned = mean(is_owned_by_program)) %>%
     ungroup()
 
-p_state_interest_pct <- ggplot(
-        data = d_state_interest_pct,
+g_state_interest_ownership_pct <- ggplot(
+        data = d_state_interest_ownership_pct,
         mapping = aes(
-            x = pct_federal_interest,
-            y = fct_reorder(state_code, pct_federal_interest),
+            x = pct_federal_interest_owned,
+            y = fct_reorder(state_code, pct_federal_interest_owned),
         )
     ) +
     geom_bar(
@@ -301,8 +326,8 @@ p_state_interest_pct <- ggplot(
     ) +
     geom_text(
         mapping = aes(
-            label = percent(pct_federal_interest, accuracy = 1),
-            x = pct_federal_interest - 0.03
+            label = percent(pct_federal_interest_owned, accuracy = 1),
+            x = pct_federal_interest_owned - 0.03
         ),
         stat = "identity",
         position = "identity",
@@ -313,10 +338,10 @@ p_state_interest_pct <- ggplot(
     labs(
         x = "",
         y = "",
-        title = str_wrap("Share of Head Start facilities with federal interest, 
-            by state", width = 55),
-        caption = str_wrap("Sources: Facilities pulled from Head Start 
-            Enterprise System as of March 7, 2023.", width = 85)
+        title = str_wrap("Share of Head Start locations with federal interest 
+        that are owned by program, by state", width = 55),
+        caption = str_wrap("Sources: Locations pulled from Head Start 
+            Enterprise System as of April 6, 2023.", width = 85)
     ) + 
     # customize scales
     scale_x_continuous(expand = c(0, 0)) +
@@ -328,31 +353,29 @@ p_state_interest_pct <- ggplot(
         axis.text.y = element_text(size = rel(0.8)),
         title = element_text(size = rel(0.8))
     )
-p_state_interest_pct
+g_state_interest_ownership_pct
 ggsave(
     filename = paste(od, "state_and_interest_pct.jpg", sep = "/"), 
-    plot = p_state_interest_pct,
+    plot = g_state_interest_ownership_pct,
     width = 4,
     height = 8,
 )
 
-#### Q: what is overall and by-hazard type risk Head Start facilities face? ####
+#### Q: what is overall and by-hazard type risk Head Start locations face? ####
 # overall x risk type
 g_hazards <- ggplot(
-        data = d_facilities_byrisk,
+        data = d_locations_byrisk,
         mapping = aes(
             x = risk_type,
-            fill = risk_rating
+            fill = risk_rating,
+            label = percent(
+                after_stat(count/tapply(count, x, sum)[as.character(x)]),
+                accuracy = 0.1
+            )
         )
     ) +
     geom_bar(stat = "count") +
     geom_bar_text(
-        mapping = aes(
-            label = percent(
-                after_stat(count/tapply(count, x, sum)[as.character(x)]),
-                accuracy = 0.1
-            ),
-        ),
         stat = "count",
         position = "stack",
         place = "middle",
@@ -363,11 +386,11 @@ g_hazards <- ggplot(
     # add title, etc.
     labs(
         x = "",
-        y = "Number of Head Start Facilities",
+        y = "Number of Head Start locations",
         title = "Head Start facility risk levels: by natural hazards",
-        caption = str_wrap("Sources: Facilities pulled from Head Start 
-            Enterprise System as of March 7, 2023. Risk ratings based on FEMA 
-            National Risk Index, November 2021 Release.", width = 85)
+        caption = str_wrap("Sources: Locations pulled from Head Start 
+            Enterprise System as of April 6, 2023. Risk ratings based on FEMA 
+            National Risk Index, March 2023 Release.", width = 85)
     ) + 
     # customize scale
     scale_fill_brewer(
@@ -393,18 +416,32 @@ ggsave(
 )
 
 #### Q: how does it look by federal interest? ####
+# prettify federal interest labels
+fi_labels <- c("Federal Interest Sites", "Non-Federal Interest Sites")
+names(fi_labels) <- c(TRUE, FALSE)
+
+# pre-aggregate
+s_locations_byrisk_interest <- d_locations_byrisk %>%
+    count(is_federal_interest_site, risk_type, risk_rating) %>%
+    group_by(is_federal_interest_site, risk_type) %>%
+    mutate(pct = n / sum(n)) %>%
+    ungroup()
+
 # including all risk ratings
 g_interest <- ggplot(
-        data = d_facilities_byrisk,
+        data = s_locations_byrisk_interest %>% 
+            mutate(is_federal_interest_site = 
+                    factor(is_federal_interest_site, levels = c(TRUE, FALSE))),
         mapping = aes(
-            x = risk_rating,
-            fill = is_federal_interest_site
+            x = risk_type,
+            y = n,
+            fill = risk_rating,
+            label = percent(pct,accuracy = 0.1)
         )
     ) +
-    geom_bar() +
+    geom_bar(stat = "identity") +
     geom_bar_text(
-        mapping = aes(label = after_stat(count)),
-        stat = "count",
+        stat = "identity",
         position = "stack",
         place = "middle",
         size = 8,
@@ -413,26 +450,29 @@ g_interest <- ggplot(
     ) +
     # by risk type
     facet_wrap(
-        ~risk_type,
+        ~is_federal_interest_site,
         ncol = 2,
+        scales = "free_y",
+        labeller = labeller(is_federal_interest_site = fi_labels)
     ) +
     # add title, etc.
     labs(
         x = "",
-        y = "Number of Head Start Facilities",
+        y = "Number of Head Start locations",
         title = "Head Start facility risk levels: by federal interest",
-        caption = str_wrap("Sources: Facilities pulled from Head Start 
-            Enterprise System as of March 7, 2023. Risk ratings based on FEMA 
-            National Risk Index, November 2021 Release.", width = 85)
+        caption = str_wrap("Sources: Locations pulled from Head Start 
+            Enterprise System as of April 6, 2023. Risk ratings based on FEMA 
+            National Risk Index, March 2023 Release.", width = 85)
     ) + 
-    # customize scale
-    scale_fill_manual(
-        name = "Federal Interest",
-        values = c("FALSE" = acf_palette[1], "TRUE" = acf_palette[3]),
-        labels = c("No", "Yes")
+    # customize scales
+    scale_fill_brewer(
+        name = "Risk Rating",
+        type = "seq",
+        palette = "OrRd",
+        direction = -1,
     ) +
-    # wrap rating labels
     scale_x_discrete(labels = function(x) str_wrap(x, width = 10)) +
+    scale_y_continuous(labels = comma_format()) +
     # extra formatting
     theme(
         # format legend
@@ -447,22 +487,14 @@ g_interest
 ggsave(
     filename = paste(od, "risk_and_interest.jpg", sep = "/"), 
     plot = g_interest,
-    width = 8,
+    width = 10,
     height = 6,
 )
 
-#### Q: for at-risk federal interest buildings, what's ownership breakdown? ####
-# TBD DISCUSSION
-    
-#### Q: for at-risk federal interest buildings, what's program breakdown ####
-# TBD DISCUSSION
-
-#### Q: where are there high concentrations of risk? ####
+#### Q: where are there high concentrations of risk amongst federal interest sites? ####
 # by state and natural hazard
-fi_labels <- c("No Federal Interest", "With Federal Interest")
-names(fi_labels) <- c(FALSE, TRUE)
-
-g_state_concentration <- d_facilities_atrisk %>%
+g_state_concentration <- d_locations_atrisk %>%
+    filter(is_federal_interest_site) %>%
     split(.$risk_type) %>%
     map(
         ~ggplot(
@@ -474,7 +506,6 @@ g_state_concentration <- d_facilities_atrisk %>%
         ) +
         geom_bar(stat = "count") +
         geom_bar_text(
-            mapping = aes(label = after_stat(count)),
             stat = "count",
             position = "stack",
             place = "middle",
@@ -484,18 +515,14 @@ g_state_concentration <- d_facilities_atrisk %>%
             family = "Gill Sans MT"
         ) +
         coord_flip() +
-        # facet_wrap(
-        #     ~is_federal_interest_site,
-        #     labeller = labeller(is_federal_interest_site =  fi_labels)
-        # ) +
         # add title, etc.
         labs(
             x = "",
             y = "",
-            title = str_c("States with moderate-to-high", unique(.$risk_type), "risk", sep = " "),
-            caption = str_wrap("Sources: Facilities pulled from Head Start 
-            Enterprise System as of March 7, 2023. Risk ratings based on FEMA 
-            National Risk Index, November 2021 Release.", width = 85)
+            title = str_c("At-risk Federal Interest Head Start sites:", unique(.$risk_type), sep = " "),
+            caption = str_wrap("Sources: Locations pulled from Head Start 
+            Enterprise System as of April 6, 2023. Risk ratings based on FEMA 
+            National Risk Index, March 2023 Release.", width = 80)
         ) + 
         scale_fill_brewer(
             name = "Risk Rating",
@@ -516,7 +543,7 @@ g_state_concentration <- d_facilities_atrisk %>%
 
 fp_state_concentration <- str_c(
     od,
-    str_c("state_",names(g_state_concentration), ".jpg"),
+    str_c("state_hazard_",names(g_state_concentration), ".jpg"),
     sep = "/"
 )
 
@@ -528,22 +555,36 @@ pwalk(
 )
 
 #### state drill-downs ####
-# define states of interest
-focus_states <- c("CA", "FL", "LA", "SC", "TX")
+# define states of interest: in top 5 w/ at-risk federal interest sites
+# per risk type, plus a few states getting emergency appropriations
+d_focus_states <- d_locations_atrisk %>%
+    filter(is_federal_interest_site) %>%
+    group_by(risk_type, state_code) %>%
+    summarize(n_sites = n()) %>%
+    ungroup() %>%
+    arrange(risk_type, n_sites %>% desc()) %>%
+    group_by(risk_type) %>%
+    slice_head(n = 5) %>%
+    ungroup()
+    
+focus_states <- c(d_focus_states$state_code, "SC", "PR", "NC") %>% unique()
 
 # summarize key grantee info by state
-t_state_drilldown <- d_facilities_atrisk %>%
-    filter(state_code %in% focus_states) %>%
+t_state_drilldown <- d_locations_atrisk %>%
+    filter(
+        state_code %in% focus_states,
+        risk_type != "Overall"
+    ) %>%
     split(.$state_code) %>%
     map(
         . %>%
             group_by(risk_type) %>%
             summarize(
-                `Total` = n_distinct(facility_id),
+                `Total` = n_distinct(location_id),
                 `With Federal Interest` = n_distinct(
-                    if_else(is_federal_interest_site, facility_id, NA)),
+                    if_else(is_federal_interest_site, location_id, NA)),
                 `Owned` = n_distinct(
-                    if_else(is_owned_by_program, facility_id, NA)),
+                    if_else(is_owned_by_program, location_id, NA)),
                 `Grantees` = n_distinct(grantee),
                 `Grants` = n_distinct(grant_id),
             ) %>%
@@ -558,16 +599,16 @@ t_state_drilldown <- d_facilities_atrisk %>%
                 columns = everything(),
             ) %>%
             tab_row_group(
-                label = md("**At-Risk Facilities**"),
+                label = md("**At-Risk Locations**"),
                 rows = matches("[Grant]{0}"),
-                id = "rg_facilities"
+                id = "rg_locations"
             ) %>%
             tab_row_group(
                 label = md("**Grantee Concentration**"),
                 rows = starts_with("Grant"),
                 id = "rg_grantees"
             ) %>%
-            row_group_order(groups = c("rg_facilities", "rg_grantees"))
+            row_group_order(groups = c("rg_locations", "rg_grantees"))
     )
 
 fp_state_drilldown <- str_c(
@@ -583,14 +624,25 @@ pwalk(
     vheight = 600
 )
 
-# find grantees with most number of facilities in state
-d_facilities_atrisk %>%
-    filter(state_code %in% focus_states) %>%
+# find grantees with most number of at-risk federal interest locations in state
+d_grantees_with_concentrated_risk <- d_locations_atrisk %>%
+    filter(
+        state_code %in% focus_states,
+        is_federal_interest_site,
+    ) %>%
     split(.$state_code) %>%
     map(
         . %>%
             group_by(grantee) %>%
-            summarize(n_facilties_per_grantee = n_distinct(facility_id)) %>%
+            summarize(n_locations_per_grantee = n_distinct(location_id)) %>%
             ungroup() %>%
-            arrange(n_facilties_per_grantee %>% desc())
+            arrange(n_locations_per_grantee %>% desc()) %>%
+            slice_head(n = 10)
     )
+
+d_grantees_with_concentrated_risk <- d_grantees_with_concentrated_risk %>% 
+    map_dfr(~as_tibble(.)) %>%
+    mutate(state_code = rep(focus_states, 10) %>% sort())
+
+write_csv(d_grantees_with_concentrated_risk,
+    paste(od, "state_grantee_concentrations.csv", sep = "/"))
