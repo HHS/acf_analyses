@@ -1,2 +1,4 @@
 data*
+test*
+**/output/*.csv
 climate/headstart_facility_risk/SCRAP.R
