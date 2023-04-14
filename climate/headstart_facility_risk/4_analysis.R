@@ -1,6 +1,6 @@
 ###############################################################################
 # PURPOSE: understand HS facility risk of tornadoes, hurricanes, wildfires
-# LAST EDITED: 12 apr 2023
+# LAST EDITED: 13 apr 2023
 # RELATED: https://public.tableau.com/app/profile/janeyang/viz/HeadStartFacilityHazardRisks/NaturalHazardRiskforHeadStartFacility
 ############################################################################### . 
 
@@ -646,3 +646,14 @@ d_grantees_with_concentrated_risk <- d_grantees_with_concentrated_risk %>%
 
 write_csv(d_grantees_with_concentrated_risk,
     paste(od, "state_grantee_concentrations.csv", sep = "/"))
+
+#### update analyzable data to include focus states ####
+save(
+    d_nia_data,
+    d_nia_dictionary,
+    focus_states,
+    d_locations,
+    d_locations_byrisk,
+    d_tableau,
+    file = paste(dd, "4_analyzable.Rdata", sep = "/")
+)
