@@ -257,18 +257,21 @@ d_case_studies <- d_locations %>%
         # aian (e)hs,  tornado + wildfire + rural
         "90CI010032-3",
         "90CI010032-12",
+        # aian (ehs), wildfire + rural
+        "09CH010861-13", # picking out CA site though doesn't meet pov criteria
         # migrant (e)hs, hurricane + urban
         "90HM000016-12",
         # migrant (e)hs, tornado + rural
         "90CM009842-1",
         # (e)hs, hurricane + isolated
         "02CH012204-28",
-        # (e)hs, hurricane + urban
-        "04CH012001-12",
-        "04CH010686-2",
+        # (e)hs, hurricane + rural
+        "04CH011336-8",
         # (e)hs, tornado + urban
         "04CH011230-1",
-        "04CH011010-10"
+        "04CH011010-10",
+        # (e)hs, wildfire + rural
+        "90CM009846-3"
     ))
 
 # estimate roughly how many locations are *roughly* similar to the proposed case 
@@ -305,3 +308,4 @@ save(
 )
 
 write_csv(d_case_studies, paste(od, "case_study_locations.csv", sep = "/"))
+write_csv(s_locations_similarish, paste(od, "at_risk_breakdown.csv", sep = "/"))
