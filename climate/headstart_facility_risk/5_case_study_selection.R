@@ -1,6 +1,6 @@
 ###############################################################################
 # PURPOSE: identify potential case studies
-# LAST EDITED: 13 apr 2023
+# LAST EDITED: 1 may 2023
 ############################################################################### . 
 
 #### set up ####
@@ -172,7 +172,7 @@ d_locations %>%
     # >>> gaps mostly in territories, though a few in states
     #     due to gaps in ACS-provided data
 
-#### identify case study locations ####
+#### identify illustrative locations ####
 # focus on federal interest locations with highest level of risk for at 
 # least one hazard type
 d_programs_vhighrisk <- d_locations %>% 
@@ -251,7 +251,7 @@ d_case_study_options %>%
 d_case_study_options %>%
     summarize(across(ends_with("_riskr"), ~ sum(. == "Very High")))
 
-# narrow by portfolio-based priorities --> handpick from here
+# narrow by portfolio-based priorities --> pull examples from here
 d_case_studies <- d_locations %>%
     filter(location_id %in% c(
         # aian (e)hs,  tornado + wildfire + rural
@@ -304,8 +304,8 @@ save(
     d_locations,
     s_locations_similarish,
     focus_states,
-    file = paste(dd, "5_locations_final.Rdata", sep = "/")
+    file = paste(dd, "5_illustrative_examples.Rdata", sep = "/")
 )
 
-write_csv(d_case_studies, paste(od, "case_study_locations.csv", sep = "/"))
+write_csv(d_case_studies, paste(od, "illustrative_examples.csv", sep = "/"))
 write_csv(s_locations_similarish, paste(od, "at_risk_breakdown.csv", sep = "/"))
