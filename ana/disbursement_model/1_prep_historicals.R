@@ -1,6 +1,6 @@
 ###############################################################################
 # PURPOSE: munge historical award data
-# LAST EDITED: 6 june 2023
+# LAST EDITED: 20 june 2023
 ############################################################################### . 
 
 #### set up ####
@@ -103,8 +103,14 @@ pull_fields <- function(data) {
             decision = starts_with("Fund"),
             starts_with("amt_"),
         ) %>%
-        # focus on funded applications
-        filter(str_detect(decision, "^F")) %>%
+        # if there's approved funding and missing decision, then indicate 
+        # application is funded
+        mutate(decision = if_else(!is.na(amt_y1), "F", as.character(decision))) %>%
+        # focus on funded applications and ignore subtotal rows
+        filter(
+            str_detect(decision, "^F"),
+            !is.na(grantee),
+        ) %>%
         # do light data clean-up
         mutate(
             grantee = str_to_lower(grantee),
@@ -216,9 +222,10 @@ s_seds
 fy23_total_available <- 49696475
 fy23_funded <- d_disbursals_partial %>%
     filter(fy_disbursed == 2023) %>%
-    summarize(amt = sum(amt, na.rm = TRUE))
+    summarize(amt = sum(amt, na.rm = TRUE)) %>%
+    pull(amt)
 fy23_seds_available <- fy23_total_available - fy23_funded
-fy_23_seds_grants <- floor(fy23_seds_available/s_seds$amt_yr_avg)
+fy_23_seds_grants <- ceiling(fy23_seds_available/(s_seds %>% pull(amt_yr_avg)))
 
 d_disbursals_seds <- tibble(
     grant = "SEDS",
@@ -228,7 +235,7 @@ d_disbursals_seds <- tibble(
     yr_n = rep(1:3, fy_23_seds_grants),
     fy_approved = 2023,
     fy_disbursed = fy_approved + yr_n - 1,
-    amt = s_seds$amt_yr_avg,
+    amt = fy23_seds_available/fy_23_seds_grants, # use all available funding
 )
 
 d_disbursals <- bind_rows(d_disbursals_partial, d_disbursals_seds) %>%
