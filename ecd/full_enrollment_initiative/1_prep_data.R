@@ -4,7 +4,8 @@
 # NOTES:
 #   - Data is from January 2022 through May 2023, inclusive
 #   - We do not consider enrollment in June, July and August for entry into FEI
-#   - Exclude Region 13 (interim) grants
+#   - Exclude Region 13 (interim) grants given transitory nature
+#   - Exclude Migrant and Seasonal grants due to annual enrollment approach
 ############################################################################### . 
 
 #### set up ####
@@ -144,10 +145,17 @@ nrow(d_enrollment_renamed) == n_rows_expected # TRUE, yay!
 
 #### finish cleaning up enrollment report data ####
 d_enrollment <- d_enrollment_renamed %>%
-    # remove Region 13 (interim grants)
-    filter(region != "13") %>%
-    # remove column with no data in it
-    select(-inactive) %>%
+    filter(
+        # remove Region 13 (interim grants)
+        region != "13",
+        # remove rows when a program isn't funded (e.g. grant has HS but not EHS)
+        !is.na(hses_funded),
+    ) %>%
+    # remove column with no, outdated, and or unnecessary data
+    select(
+        -inactive,
+        -ends_with("plan_end_date"),
+    ) %>%
     # clarify variable names
     rename(
         grant_id = grant_number,
@@ -161,14 +169,6 @@ d_enrollment <- d_enrollment_renamed %>%
         slots_diff_reported_from_funded = diff,
         slots_pct_reported_over_funded = percent,
     ) %>%
-    # collapse plan end date variables
-    mutate(
-        plan_end_date = coalesce(
-            head_start_plan_end_date,
-            early_head_start_plan_end_date
-        ),
-        .keep = "unused"
-    ) %>%
     # update column types
     mutate(
         report_month = my(report_month),
@@ -176,12 +176,9 @@ d_enrollment <- d_enrollment_renamed %>%
             program_acronym == "CH" ~ "Region 01 – 10",
             # american indian and alaska native (early) head start
             program_acronym == "CI" ~ "Region 11 American Indian and Alaska Native (AIAN)",
-            # migrant and seasonal (early) head start
-            program_acronym == "CM" ~ "Region 12 Migrant and Seasonal Head Start (MSHS)",
             # early head start child care partnerships
             program_acronym == "HP" ~ "Region 01 – 10 EHS-CCP",
             program_acronym == "HI" ~ "Region 11 American Indian and Alaska Native (AIAN) EHS-CCP",
-            program_acronym == "HM" ~ "Region 12 Migrant and Seasonal Head Start (MSHS) EHS-CCP",
         ),
         program_detail = case_when(
             str_detect(grant_type, "AIAN") ~ "AIAN",
@@ -213,11 +210,10 @@ d_enrollment <- d_enrollment_renamed %>%
                 early_head_start,
                 operational,
             ),
-            # TODO: check if this logic is true for 'operational'
             .fns = ~ case_when(
-                . == "yes" ~ TRUE,
-                . == "no" ~ FALSE,
-                is.na(.) ~ FALSE
+                . == "yes" ~ TRUE, # actively providing service
+                . == "no" ~ FALSE, # program closed for some reason
+                is.na(.) ~ NA, # haven't reported for month yet
             )
         ),
     )
@@ -226,7 +222,8 @@ glimpse(d_enrollment)
 
 #### clean up FEI grant recipient data ####
 # rename variables
-d_fei_renamed <- d_fei_raw
+d_fei_renamed <- d_fei_raw %>%
+    select(-contains("Action Date"))
 
 names(d_fei_renamed) <- c(
     "region",
@@ -236,10 +233,8 @@ names(d_fei_renamed) <- c(
     "annual_funding_month",
     "fei_status_hs",
     "fei_effective_date_hs",
-    "fei_action_date_hs",
     "fei_status_ehs",
-    "fei_effective_date_ehs",
-    "fei_action_date_ehs"
+    "fei_effective_date_ehs"
 )
 
 
@@ -263,12 +258,14 @@ d <- d_enrollment %>%
     mutate(
         fei_status_asof_20230607 = coalesce(fei_status_hs, fei_status_ehs),
         fei_effective_date = coalesce(fei_effective_date_hs, fei_effective_date_ehs),
-        fei_action_date = coalesce(fei_action_date_hs, fei_action_date_ehs),
         is_report_month_during_fei = report_month >= fei_effective_date &
             report_month < fei_effective_date %m+% months(12),
-        # if grant was ever under FEI, regardless of current status
-        # TODO: clarify if the FEI list only includes still-active grants
-        is_fei = if_else(is.na(is_fei), FALSE, is_fei),
+        # flag if grant has been under FEI since 2022, regardless of current status
+        is_fei = case_when(
+            is.na(is_fei) ~ FALSE, 
+            fei_effective_date < ymd("2023-01-01") ~ FALSE, # inaccurate data
+            TRUE ~ TRUE
+        ),
         .keep = "unused"
     ) %>%
     # reorder columns 
@@ -276,7 +273,6 @@ d <- d_enrollment %>%
         contains("grant") & !contains("comments_"),
         contains("program"),
         contains("month") & !contains("fei"),
-        plan_end_date,
         region,
         state,
         starts_with("slots_"),
