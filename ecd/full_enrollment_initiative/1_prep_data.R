@@ -106,7 +106,7 @@ d_enrollment_renamed <- d_enrollment_raw
 names(d_enrollment_renamed) <- d_enrollment_col_names
 
 # make variable names easier to work with
-d_enrollment <- d_enrollment_renamed %>% 
+d_enrollment_renamed <- d_enrollment_renamed %>% 
     # drop original header rows and empty rows
     slice(-(1:3)) %>% 
     filter(!is.na(`Grant Number`)) %>%
@@ -140,13 +140,89 @@ n_programs <- 2
 
 n_rows_expected <- n_grants * n_months * n_programs
 
-nrow(d_enrollment) == n_rows_expected # TRUE, yay!
+nrow(d_enrollment_renamed) == n_rows_expected # TRUE, yay!
 
 #### finish cleaning up enrollment report data ####
+d_enrollment <- d_enrollment_renamed %>%
+    # remove Region 13 (interim grants)
+    filter(region != "13") %>%
+    # remove column with no data in it
+    select(-inactive) %>%
+    # clarify variable names
+    rename(
+        grant_id = grant_number,
+        report_month = month,
+        preceding_grant_id = preceding_grant,
+        slots_funded = hses_funded,
+        slots_reported = reported,
+        slots_enrolled = enrolled,
+        slots_reserved = reserved,
+        slots_vacant = vacant,
+        slots_diff_reported_from_funded = diff,
+        slots_pct_reported_over_funded = percent,
+    ) %>%
+    # collapse plan end date variables
+    mutate(
+        plan_end_date = coalesce(
+            head_start_plan_end_date,
+            early_head_start_plan_end_date
+        ),
+        .keep = "unused"
+    ) %>%
+    # update column types
+    mutate(
+        report_month = my(report_month),
+        grant_type = case_when(
+            program_acronym == "CH" ~ "Region 01 – 10",
+            # american indian and alaska native (early) head start
+            program_acronym == "CI" ~ "Region 11 American Indian and Alaska Native (AIAN)",
+            # migrant and seasonal (early) head start
+            program_acronym == "CM" ~ "Region 12 Migrant and Seasonal Head Start (MSHS)",
+            # early head start child care partnerships
+            program_acronym == "HP" ~ "Region 01 – 10 EHS-CCP",
+            program_acronym == "HI" ~ "Region 11 American Indian and Alaska Native (AIAN) EHS-CCP",
+            program_acronym == "HM" ~ "Region 12 Migrant and Seasonal Head Start (MSHS) EHS-CCP",
+        ),
+        program_detail = case_when(
+            str_detect(grant_type, "AIAN") ~ "AIAN",
+            str_detect(grant_type, "MSHS") ~ "MSHS",
+            TRUE ~ "Base",
+        ),
+        across(
+            .cols = c(
+                program, 
+                program_detail,
+                region, 
+                state, 
+                program_acronym, 
+                annual_funding_month,
+                grant_type,
+            ),
+            .fns = as.factor
+        ),
+        across(
+            .cols = c(
+                starts_with("slots_"),
+                months_under_enrolled,
+            ),
+            .fns = as.numeric
+        ),
+        across(
+            .cols = c(
+                head_start,
+                early_head_start,
+                operational,
+            ),
+            # TODO: check if this logic is true for 'operational'
+            .fns = ~ case_when(
+                . == "yes" ~ TRUE,
+                . == "no" ~ FALSE,
+                is.na(.) ~ FALSE
+            )
+        ),
+    )
 
-# convert data types
-
-# remove Region 13 (interim grants)
+glimpse(d_enrollment)
 
 #### clean up FEI grant recipient data ####
 # rename variables
@@ -166,15 +242,58 @@ names(d_fei_renamed) <- c(
     "fei_action_date_ehs"
 )
 
+
 # factorize categorical variables
 d_fei <- d_fei_renamed %>%
     mutate(across(c("region", "state", "annual_funding_month"), ~as.factor(.)))
 
+glimpse(d_fei)
+
 #### add fei context to enrollment report data ####
+duplicate_cols <- c("region", "state", "grantee", "annual_funding_month")
+
+d <- d_enrollment %>%
+    left_join(
+        d_fei %>% 
+            select(-all_of(duplicate_cols)) %>%
+            mutate(is_fei = TRUE), 
+        by = "grant_id"
+    ) %>%
+    # add context around enrollment report timing
+    mutate(
+        fei_status_asof_20230607 = coalesce(fei_status_hs, fei_status_ehs),
+        fei_effective_date = coalesce(fei_effective_date_hs, fei_effective_date_ehs),
+        fei_action_date = coalesce(fei_action_date_hs, fei_action_date_ehs),
+        is_report_month_during_fei = report_month >= fei_effective_date &
+            report_month < fei_effective_date %m+% months(12),
+        # if grant was ever under FEI, regardless of current status
+        # TODO: clarify if the FEI list only includes still-active grants
+        is_fei = if_else(is.na(is_fei), FALSE, is_fei),
+        .keep = "unused"
+    ) %>%
+    # reorder columns 
+    select(
+        contains("grant") & !contains("comments_"),
+        contains("program"),
+        contains("month") & !contains("fei"),
+        plan_end_date,
+        region,
+        state,
+        starts_with("slots_"),
+        is_operational = operational,
+        has_head_start = head_start,
+        has_early_head_start = early_head_start,
+        starts_with("comments_"),
+        is_fei,
+        is_report_month_during_fei,
+        starts_with("fei"),
+    )
+glimpse(d)
 
 #### save cleaned data ####
 save(
     file = paste(dd, "1_clean_data.Rdata", sep = "/"),
     d_fei,
-    d_enrollment
+    d_enrollment,
+    d
 )
