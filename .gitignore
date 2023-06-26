@@ -1,5 +1,6 @@
 data*
 test*
+*.Rproj*
 **/output/*.csv
 climate/headstart_facility_risk/SCRAP.R
 ana/disbursement_model/output/approved_funding_2020-2023.jpg
