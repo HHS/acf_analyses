@@ -266,10 +266,12 @@ d <- d_enrollment %>%
             fei_effective_date < ymd("2023-01-01") ~ FALSE, # inaccurate data
             TRUE ~ TRUE
         ),
+        pk = as.character(row_number()),
         .keep = "unused"
     ) %>%
     # reorder columns 
     select(
+        pk,
         contains("grant") & !contains("comments_"),
         contains("program"),
         contains("month") & !contains("fei"),
