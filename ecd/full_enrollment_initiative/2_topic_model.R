@@ -82,10 +82,11 @@ d_grants_topics <- tidy(lda_grants, matrix = "beta")
 
 d_topics_by_grant <- tidy(lda_grants, matrix = "gamma")
 
-d_topics_by_grant %>% 
+d_topic_mapping <- d_topics_by_grant %>% 
   pivot_wider(id_cols = document, names_from = topic, values_from = gamma) %>% 
-  left_join(d %>% select(pk, comments_grantee), by = join_by(document == pk)) %>% 
-  view()
+  left_join(d %>% select(pk, comments_grantee), by = join_by(document == pk))
+view(d_topic_mapping)
+write_csv(d_topic_mapping, file = paste(od, "topic_mapping.csv", sep = "/"))
 
 d_topics_by_region <- d %>% 
   select(pk, region) %>% 
