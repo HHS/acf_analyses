@@ -1,6 +1,6 @@
 ###############################################################################
 # PURPOSE: prepare HSES enrollment data export into analyzable format
-# LAST EDITED: 22 june 2023
+# LAST EDITED: 8 august 2023
 # NOTES:
 #   - Data is from January 2022 through May 2023, inclusive
 #   - We do not consider enrollment in June, July and August for entry into FEI
@@ -266,8 +266,7 @@ d <- d_enrollment %>%
             fei_effective_date < ymd("2023-01-01") ~ FALSE, # inaccurate data
             TRUE ~ TRUE
         ),
-        pk = as.character(row_number()),
-        .keep = "unused"
+        pk = as.character(row_number())
     ) %>%
     # reorder columns 
     select(
@@ -284,7 +283,7 @@ d <- d_enrollment %>%
         starts_with("comments_"),
         is_fei,
         is_report_month_during_fei,
-        starts_with("fei"),
+        starts_with("fei") & !matches("_[e]?hs$"),
     )
 glimpse(d)
 
