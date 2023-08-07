@@ -1,6 +1,6 @@
 ###############################################################################
 # PURPOSE: pull sample of comments to manually code
-# LAST EDITED: 3 august 2023
+# LAST EDITED: 7 august 2023
 ############################################################################### . 
 
 #### set up ####
@@ -74,7 +74,12 @@ d_grants_sample %>%
 
 # create comment sample
 d_sample <- d %>%
-    filter(grant_id %in% d_grants_sample$grant_id) %>%
+    filter(
+        # comment from a sample grant
+        grant_id %in% d_grants_sample$grant_id,
+        # only include comments for under-enrolled months
+        slots_pct_reported_over_funded < 1,
+    ) %>%
     arrange(region, grant_id, report_month)
 
 s_sample <- d_sample %>%
