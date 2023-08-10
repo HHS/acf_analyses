@@ -22,13 +22,13 @@ d_b5_svy <- as_survey(d_b5, weight = perwt, repweights = matches("repwtp[0-9]+")
     type = "JK1", scale = 4/ 80 , rscales = rep(1, 80 ), mse = TRUE)
 
 # calculate margin of error when aggregating by puma, age year, and
-# household income <= 350% of poverty level
+# household income <= 100% of poverty level
 s_b5 <- d_b5_svy %>%
-    mutate(household_income_less_than_350pct_poverty = poverty <= 350) %>%
+    mutate(household_income_less_than_100pct_poverty = poverty <= 100) %>%
     group_by(
         state, statefip, puma,
         age,
-        household_income_less_than_350pct_poverty,
+        household_income_less_than_100pct_poverty,
     ) %>%
     summarize(
         # estimate population with standard error
@@ -49,8 +49,8 @@ s_b5 <- s_b5 %>%
 For instance, we can examine the margin of errors (MOE) as a percent of
 the population estimate for groupings of [public use microdata areas
 (PUMAs)](https://www.census.gov/programs-surveys/geography/guidance/geo-areas/pumas.html),
-single-year ages, and whether a child lives in a household with \<350%
-the Federal poverty line. There are 28,204 such groupings. The following
+single-year ages, and whether a child lives in a household with \<100%
+the Federal poverty line. There are 28,034 such groupings. The following
 histogram illustrates the distribution.
 
 ``` r
@@ -63,7 +63,7 @@ g_moe_pct <- ggplot(s_b5) +
     ) +
     labs(
         title = "Distribution of margins of errors (MOE) as percent of population estimate",
-        subtitle = "by groupings of PUMA, single-year age, and\nhousehold income greater or less than 350% of Federal poverty line",
+        subtitle = "by groupings of PUMA, single-year age, and\nhousehold income greater or less than 100% of Federal poverty line",
         x = "MOE/population estimate",
         y = "number of groupings"
     ) +
@@ -75,8 +75,8 @@ g_moe_pct
 ![](explore_moe_files/figure-gfm/plot_moe_distribution-1.png)<!-- -->
 
 Of the combinations of PUMA, age by year, and indicator of whether a
-child lives in a household with \<350% the Federal poverty line, 1% have
-an MOE \> 100% of the population estimate and 21% have an MOE \> 50% of
+child lives in a household with \<100% the Federal poverty line, 7% have
+an MOE \> 100% of the population estimate and 35% have an MOE \> 50% of
 the population estimate.
 
 The draft *B-5 Explorer* allows for significantly more filters to be
