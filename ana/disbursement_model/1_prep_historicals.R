@@ -51,8 +51,7 @@ od <- paste(wd, "output", sep = "/")
 # create list of all data files
 files <- dir_ls(dd) %>%
     str_subset("Decision Book") %>%
-    str_subset("2019", negate = TRUE) %>%
-    str_subset("Original", negate = TRUE)
+    str_subset(regex("2019|Original|Projections"), negate = TRUE)
 
 # define function to pull specific fields of interest
 # from a decision book sheet
@@ -131,7 +130,7 @@ d_raw <- map(files, load_decision_book) %>%
 
 #### prepare data for analysis ####
 # create disbursal-level dataset
-d_disbursals_partial <- d_raw %>%
+d_disbursals <- d_raw %>%
     select(-decision) %>%
     mutate(
         # remove inconsistent year labels
@@ -158,6 +157,7 @@ d_disbursals_partial <- d_raw %>%
         ),
         amt = if_else(amt == 0, NA, amt),
     ) %>%
+    filter(!is.na(amt)) %>%
     #reorder columns
     select(
         grant,
@@ -169,54 +169,22 @@ d_disbursals_partial <- d_raw %>%
         fy_disbursed,
         amt,
     )
-glimpse(d_disbursals_partial)
-
-# add approximate data for 2023 SEDS based on average annual disbursement and
-# duration from historicals
-s_seds <- d_disbursals_partial %>%
-    filter(
-        grant == "SEDS",
-        !is.na(amt),
-    ) %>%
-    group_by(application_id) %>%
-    summarize(
-        yrs = n(),
-        amt_total = sum(amt),
-    ) %>%
-    ungroup() %>%
-    summarize(
-        amt_yr_avg = mean(amt_total/yrs),
-        avg_yrs = mean(yrs), # ~3
-    )
-s_seds
-
-fy23_total_available <- 49696475
-fy23_funded <- d_disbursals_partial %>%
-    filter(fy_disbursed == 2023) %>%
-    summarize(amt = sum(amt, na.rm = TRUE)) %>%
-    pull(amt)
-fy23_seds_available <- fy23_total_available - fy23_funded
-fy_23_seds_grants <- ceiling(fy23_seds_available/(s_seds %>% pull(amt_yr_avg)))
-
-d_disbursals_seds <- tibble(
-    grant = "SEDS",
-    grant_type = "development",
-    application_id = paste0("assumption", rep(1:fy_23_seds_grants, 3)) %>% sort(),
-    grantee = application_id,
-    yr_n = rep(1:3, fy_23_seds_grants),
-    fy_approved = 2023,
-    fy_disbursed = fy_approved + yr_n - 1,
-    amt = fy23_seds_available/fy_23_seds_grants, # use all available funding
-)
-
-d_disbursals <- bind_rows(d_disbursals_partial, d_disbursals_seds) %>%
-    filter(!is.na(amt))
+glimpse(d_disbursals)
 
 # sanity check: basics
 glimpse(d_disbursals)
 n_distinct(d_disbursals$application_id)
 n_distinct(d_disbursals$grantee)
 summary(d_disbursals$amt)
+
+# remove grant "approved" amounts that are actually sums of approved amounts
+# for a program in a given year
+bad_data <- d_disbursals %>% 
+    filter(application_id %in% c("NA23004143", "NL23002470")) %>% 
+    pull(application_id)
+
+d_disbursals <- d_disbursals %>% 
+    filter(!(application_id %in% bad_data))
 
 # sanity check: trend by program
 s_programs <- d_disbursals %>% 
@@ -242,7 +210,7 @@ g_programs <- ggplot(s_programs) +
         subtitle = "based on decision books",
         x = "FY Approved",
         y = "Approved Amount ($ million)",
-        caption = "2023 numbers based on projections",
+        caption = "as of August 17, 2023",
     ); g_programs
 ggsave(
     paste(od, "approved_funding_2020-2023.jpg", sep = "/"),
@@ -258,7 +226,10 @@ d_grants <- d_disbursals %>%
         duration_yrs = n(),
         amt_total = sum(amt),
     ) %>%
-    ungroup()
+    ungroup() %>%
+    mutate(
+        fy_end = fy_approved + duration_yrs - 1
+    )
 glimpse(d_grants)
 
 #### save prepped data ####
