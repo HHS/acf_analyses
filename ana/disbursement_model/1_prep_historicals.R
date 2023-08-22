@@ -1,6 +1,6 @@
 ###############################################################################
 # PURPOSE: munge historical award data
-# LAST EDITED: 20 june 2023
+# LAST EDITED: 22 august2023
 ############################################################################### . 
 
 #### set up ####
@@ -14,9 +14,6 @@ library(readxl) # reading Excel
 library(lubridate) # making it easy to work with dates
 library(fs) # for file navigation
 library(scales) # for better scale labeling
-library(directlabels) # for line plot labeling
-library(ggfittext) # for text formatting in plots
-library(gt) # pretty table formatting
 library(extrafont) # custom fonts
 
 # set design factors
@@ -49,32 +46,6 @@ wd <- if_else(
 )
 dd <- paste(wd, "data", sep = "/")
 od <- paste(wd, "output", sep = "/")
-
-#### define custom exploration functions ####
-# summarize counts by group and return results arranged in descending order
-count_by_group <- function(data, arrange_var, ...){
-    group_vars <- enquos(...)
-    arrange_var <- enquo(arrange_var)
-    data %>% 
-        group_by(!!!group_vars) %>%
-        summarize(n = n()) %>%
-        ungroup() %>%
-        mutate(pct = n / sum(n)) %>%
-        arrange(!!arrange_var %>% desc())
-}
-
-# summarize totals by group and return results arranged in descending order
-sum_by_group <- function(data, arrange_var, sum_var, ...){
-    group_vars <- enquos(...)
-    arrange_var <- enquo(arrange_var)
-    sum_var <- enquo(sum_var)
-    data %>% 
-        group_by(!!!group_vars) %>%
-        summarize(n = sum(!!sum_var, na.rm = TRUE)) %>%
-        ungroup() %>%
-        mutate(pct = n / sum(n)) %>%
-        arrange(!!arrange_var %>% desc())
-}
 
 #### load data ####
 # create list of all data files
