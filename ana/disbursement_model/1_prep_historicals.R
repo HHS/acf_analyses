@@ -1,6 +1,6 @@
 ###############################################################################
 # PURPOSE: munge historical award data
-# LAST EDITED: 22 august2023
+# LAST EDITED: 25 august2023
 ############################################################################### . 
 
 #### set up ####
@@ -180,7 +180,7 @@ summary(d_disbursals$amt)
 # remove grant "approved" amounts that are actually sums of approved amounts
 # for a program in a given year
 bad_data <- d_disbursals %>% 
-    filter(application_id %in% c("NA23004143", "NL23002470")) %>% 
+    filter(application_id %in% c("NA23004143", "NL23002470", "NL22002310")) %>% 
     pull(application_id)
 
 d_disbursals <- d_disbursals %>% 
