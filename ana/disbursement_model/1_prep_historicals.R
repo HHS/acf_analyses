@@ -57,11 +57,16 @@ files <- dir_ls(dd) %>%
 # from a decision book sheet
 pull_fields <- function(data) {
     cleaned <- data %>%
-        # pull and rename approved amounts
+        # pull and rename requested and approved amounts
         rename_with(
-            .fn = ~paste0("amt_", str_sub(., -2, -1)) %>% 
+            .fn = ~paste0("amt_app_", str_sub(., -2, -1)) %>% 
                 str_to_lower, 
             .cols = contains("Approved Amount")
+        ) %>%
+        rename_with(
+            .fn = ~paste0("amt_req_y", str_sub(., -1, -1)) %>% 
+                str_to_lower, 
+            .cols = contains("Amount Requested")
         ) %>%
         # pull and rename other needed data elements
         select(
@@ -73,9 +78,13 @@ pull_fields <- function(data) {
             decision = starts_with("Fund"),
             starts_with("amt_"),
         ) %>%
-        # if there's approved funding and missing decision, then indicate 
-        # application is funded
-        mutate(decision = if_else(!is.na(amt_y1), "F", as.character(decision))) %>%
+        mutate(
+            # if amount is zero, clear out for consistency with NAs
+            across(starts_with("amt_"), ~if_else(.x == 0, NA, .x)),
+            # if there's approved funding and missing decision, then indicate 
+            # application is funded
+            decision = if_else(!is.na(amt_app_y1), "F", as.character(decision))
+        ) %>%
         # focus on funded applications and ignore subtotal rows
         filter(
             str_detect(decision, "^F"),
@@ -86,6 +95,7 @@ pull_fields <- function(data) {
             grantee = str_to_lower(grantee),
             application_id = as.character(application_id),
             decision = as.character(decision),
+            # there are some coerced NAs due to "no data" entries
             across(starts_with("amt_"), ~as.numeric(.)),
         )
     
@@ -96,7 +106,8 @@ pull_fields <- function(data) {
 load_decision_book <- function(path) {
     
     # save year of decision book
-    year <- str_extract(path, "[[:digit:]]+")
+    year <- str_extract(path, "[[:digit:]]+") %>% as.integer()
+    print(year)
     
     # get all data sheet names in workbook
     sheets <- path %>%
@@ -134,19 +145,34 @@ d_disbursals <- d_raw %>%
     select(-decision) %>%
     mutate(
         # remove inconsistent year labels
-        grant = str_extract(grant, "[[:alpha:]&-]+"),
-        # make fy approved numeric
-        fy_approved = as.numeric(fy_approved)
+        grant = str_extract(grant, "[[:alpha:]&-]+")
     ) %>%
-    # reshape to have fy amounts in separate rows
+    # reshape to have fy requested and approved amounts in separate rows
     pivot_longer(
         cols = starts_with("amt_"),
-        names_to = "yr_n",
-        names_prefix = "amt_y",
+        names_to = "type_yn",
         values_to = "amt"
     ) %>%
     mutate(
-        yr_n = as.numeric(yr_n),
+        type = str_extract(type_yn, "[req|app]{3}"),
+        yr_n = str_extract(type_yn, "[[:digit:]]") %>% as.numeric
+    ) %>%
+    # reshape to put requested and approved amounts side-by-side
+    select(-type_yn) %>%
+    pivot_wider(
+        names_from = type,
+        names_prefix = "amt_",
+        values_from = amt,
+    ) %>%
+    mutate(
+        # fill holes in FY 23 approved amounts for years 2-5 continued funding
+        # (the FY23 decision book didn't fill in the approved funding past Y1;
+        # per ANA, if Y1 is funded, subsequent requested amounts were too)
+        amt_app = if_else(
+            fy_approved == 2023 & yr_n > 1 & is.na(amt_app), 
+            amt_req, 
+            amt_app
+        ),
         fy_disbursed = fy_approved + 
             yr_n -
             1, # because the year of award is considered "y1"
@@ -154,10 +180,9 @@ d_disbursals <- d_raw %>%
             grant %in% c("EMI", "P&M"), 
             "language",
             "development"
-        ),
-        amt = if_else(amt == 0, NA, amt),
+        )
     ) %>%
-    filter(!is.na(amt)) %>%
+    filter(!is.na(amt_app)) %>%
     #reorder columns
     select(
         grant,
@@ -167,7 +192,7 @@ d_disbursals <- d_raw %>%
         yr_n,
         fy_approved,
         fy_disbursed,
-        amt,
+        amt_app,
     )
 glimpse(d_disbursals)
 
@@ -175,7 +200,7 @@ glimpse(d_disbursals)
 glimpse(d_disbursals)
 n_distinct(d_disbursals$application_id)
 n_distinct(d_disbursals$grantee)
-summary(d_disbursals$amt)
+summary(d_disbursals$amt_app)
 
 # remove grant "approved" amounts that are actually sums of approved amounts
 # for a program in a given year
@@ -191,7 +216,7 @@ s_programs <- d_disbursals %>%
     group_by(fy_approved, grant) %>%
     summarize(
         n = n_distinct(application_id),
-        amt_approved = sum(amt)
+        amt_approved = sum(amt_app)
     ) %>%
     ungroup()
 
@@ -224,7 +249,7 @@ d_grants <- d_disbursals %>%
     group_by(grant, grant_type, application_id, grantee, fy_approved) %>%
     summarize(
         duration_yrs = n(),
-        amt_total = sum(amt),
+        amt_total = sum(amt_app),
     ) %>%
     ungroup() %>%
     mutate(
