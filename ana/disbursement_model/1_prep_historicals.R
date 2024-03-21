@@ -15,6 +15,7 @@ library(lubridate) # making it easy to work with dates
 library(fs) # for file navigation
 library(scales) # for better scale labeling
 library(extrafont) # custom fonts
+library(here)
 
 # set design factors
 acf_palette <- c(
@@ -35,23 +36,15 @@ loadfonts(device = "win")
 theme_set(theme_minimal(base_family = "Gill Sans MT"))
 
 # define directories
-wd <- if_else(
-    str_detect(getwd(), "GitHub"),
-    getwd(),
-    paste(
-        getwd(), 
-        "GitHub/acf_analyses/ana/disbursement_model", 
-        sep = "/"
-    )
-)
-dd <- paste(wd, "data", sep = "/")
-od <- paste(wd, "output", sep = "/")
+wd <- here()
+dd <- here(wd, "data")
+od <- here(wd, "output")
 
 #### load data ####
 # create list of all data files
 files <- dir_ls(dd) %>%
     str_subset("Decision Book") %>%
-    str_subset(regex("2019|Original|Projections"), negate = TRUE)
+    str_subset(regex("2019|Original|Projections|202308"), negate = TRUE)
 
 # define function to pull specific fields of interest
 # from a decision book sheet
@@ -74,6 +67,7 @@ pull_fields <- function(data) {
                 !contains("Serial") &
                 !contains("Panel") &
                 !contains("Grant"),
+            grant_number = contains("Number") & contains("Grant"),
             grantee = `Name`,
             decision = starts_with("Fund"),
             starts_with("amt_"),
@@ -123,6 +117,7 @@ load_decision_book <- function(path) {
         .f = read_excel, 
         path = path
     )
+    
     names(data) <- sheets
     
     # pull data fields of interest and combine into one data frame
@@ -194,10 +189,14 @@ d_disbursals <- d_raw %>%
         fy_disbursed,
         amt_app,
     )
-glimpse(d_disbursals)
 
 # sanity check: basics
 glimpse(d_disbursals)
+assertr::verify(
+  d_disbursals, 
+  n_distinct(d_disbursals$application_id) == nrow(d_raw),
+  success_fun = assertr::success_logical
+)
 n_distinct(d_disbursals$application_id)
 n_distinct(d_disbursals$grantee)
 summary(d_disbursals$amt_app)
@@ -244,6 +243,138 @@ ggsave(
     width = 6,
 )
 
+# Confirm that totals align
+nccs_final <- here(dd, "2024 NCCsFINALforMia.xlsx")
+continuations_model <- readxl::read_excel(
+  here(od, "20230825 Projection - Grant Disbursement Change Model.xlsm"),
+  sheet="MODEL",
+  range = "G2:N32"
+) %>%
+  janitor::clean_names() %>%
+  filter(fy_dispersed == 2024) %>%
+  transmute(
+    grant = trimws(grant),
+    continuations = committed_continuations
+  )
+
+continuations_actual <- readxl::read_excel(
+  nccs_final,
+  sheet = "TOTALS",
+  col_names = FALSE
+) %>%
+  setNames(c("grant", "continuations")) %>%
+  select(grant, continuations) %>%
+  mutate(grant = trimws(grant))
+
+continuations_diff <- function(list_of_errors, data) {
+  data %>%
+    transmute(
+      grant,
+      difference = continuations.y - continuations.x
+    ) %>%
+    return()
+}
+
+d_continuations_diff <- continuations_model %>%
+  left_join(
+    continuations_actual,
+    by = "grant",
+    relationship = "one-to-one"
+  ) %>%
+  filter(!is.na(continuations.y)) %>%
+  assertr::verify(continuations.x == continuations.y, error_fun = continuations_diff)
+
+if (!all(d_continuations_diff == TRUE)) {
+  
+  continuations_diff_check <- function(list_of_errors, data) {
+    data %>%
+      mutate(difference = revised_fy24_federal_amount - amt_app) %>%
+      group_by(grant) %>%
+      summarize(difference = sum(difference)) %>%
+      left_join(
+        d_continuations_diff,
+        by = "grant"
+      ) %>%
+      # {
+      #   print(.) %>%
+      #     {return(.)}
+      # } %>%
+      assertr::verify(difference.x == difference.y, error_fun = assertr::just_warn)
+    
+    return(data)
+    
+  }
+  
+  disbursals_actual <- read_excel(nccs_final) %>%
+    janitor::clean_names() %>%
+    mutate(
+      grantee = str_to_lower(grantee_name),
+      grant = case_when(
+        grepl("90NA", grant_number) ~ "SEDS",
+        grepl("90NB", grant_number) ~ "EMI",
+        grepl("90NL", grant_number) ~ "PMI",
+        grepl("90NK", grant_number) ~ "SEDS-AK",
+        grepl("90NR", grant_number) ~ "ERE"
+      )
+    )
+  
+  disbursals_model <- d_disbursals %>%
+    filter(fy_disbursed == "2024") %>%
+    fedmatch::merge_plus(
+      disbursals_actual,
+      by = c("grantee", "grant"),
+      match_type = "multivar",
+      unique_key_1 = "application_id",
+      unique_key_2 = "grant_number",
+      multivar_settings = fedmatch::build_multivar_settings(
+        compare_type = c("stringdist", "indicator"),
+        wgts = c(.25, .75),
+        top = 1
+      )
+    )
+  
+  disbursals_model$matches %>%
+    filter(grantee_compare < .75) %>%
+    select(grant_1, grantee_1, fy_approved)
+  
+  disbursals_model$matches %>%
+    mutate(
+      revised_fy24_federal_amount = ifelse(grantee_compare < .75, 0, revised_fy24_federal_amount),
+      grant = coalesce(grant_1, grant_2)
+    ) %>%
+    assertr::verify(amt_app == revised_fy24_federal_amount, error_fun = continuations_diff_check) %>%
+    select(amt_app, revised_fy24_federal_amount)
+
+
+}
+
+emi_differences <- disbursals_model$matches %>%
+  filter(grant_1 == "EMI" & amt_app != revised_fy24_federal_amount) %>%
+  transmute(
+    grant = grant_1,
+    grantee = grantee_1,
+    amt_app, revised_fy24_federal_amount
+  )
+
+
+# Confirm that disbursals align
+d_disbursals %>%
+  filter(fy_disbursed == 2024) %>%
+  left_join(
+    select(d_raw, application_id, grant_number),
+    by = "application_id"
+  ) %>%
+  left_join(
+    disbursals_actual,
+    by = "grant_number"
+  ) %>%
+  filter(!is.na(grant_number)) %>%
+  mutate(amt_app = round(amt_app)) %>%
+  assertr::verify(
+    amt_app == approved_fy_24_federal_amount,
+    success_fun = assertr::success_logical
+  )
+
 # create grant-level dataset
 d_grants <- d_disbursals %>%
     group_by(grant, grant_type, application_id, grantee, fy_approved) %>%
@@ -262,8 +393,9 @@ save(
     d_disbursals, 
     d_grants,
     s_programs,
-    file = paste(dd, "data_clean.Rdata", sep = "/")
+    emi_differences,
+    file = file.path(dd, "data_clean.Rdata")
 )
 
-write_csv(d_disbursals, paste(od, "disbursals.csv", sep = "/"))
-write_csv(d_grants, paste(od, "grants.csv", sep = "/"))
+write_csv(d_disbursals, file.path(od, "disbursals.csv"))
+write_csv(d_grants, file.path(od, "grants.csv"))
